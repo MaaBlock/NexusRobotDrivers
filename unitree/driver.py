@@ -113,7 +113,7 @@ class UnitreeDriver(RobotDriver):
             from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
             from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 
-            ChannelFactoryInitialize(1, "eth0")
+            ChannelFactoryInitialize(0, "eth0")
 
             self._mock_msc.start()
             self._mock_sport.start()
