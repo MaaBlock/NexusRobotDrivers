@@ -1,0 +1,7 @@
+{
+  "unitree_go2":  {"driver": "unitree", "class": "UnitreeDriver"},
+  "unitree_b2":   {"driver": "unitree", "class": "UnitreeDriver"},
+  "unitree_b2w":  {"driver": "unitree", "class": "UnitreeDriver"},
+  "unitree_g1":   {"driver": "unitree", "class": "UnitreeDriver"},
+  "unitree_h1":   {"driver": "unitree", "class": "UnitreeDriver"}
+}
