@@ -310,6 +310,11 @@ class UnitreeDriver(RobotDriver):
         low_state = self._LowState_factory()
         self._tick_counter += 1
         low_state.tick = self._tick_counter
+
+        # 设置 IMU 默认值 (朝上站立)，防止控制脚本因全零四元数产生 NaN
+        low_state.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]  # w, x, y, z
+        low_state.imu_state.gyroscope = [0.0, 0.0, 0.0]
+
         joint_positions = [0.0] * self._num_motors
         for motor in state.motors:
             try:
