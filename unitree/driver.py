@@ -215,8 +215,10 @@ class UnitreeDriver(RobotDriver):
             from unitree_sdk2py.core.channel import (
                 ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
             )
-
-            ChannelFactoryInitialize(0, "eth0")
+            import os
+            dds_iface = os.environ.get("UNITREE_DDS_IFACE", "lo")
+            ChannelFactoryInitialize(0, dds_iface)
+            logger.info(f"DDS 初始化: domain=0, interface={dds_iface}")
 
             if self._robot_type == "g1":
                 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
