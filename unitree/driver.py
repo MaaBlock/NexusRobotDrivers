@@ -208,6 +208,7 @@ class UnitreeDriver(RobotDriver):
         self._mock_msc = MockMotionSwitcherServer()
         self._sport_server = SportMotionServer()
         self._motion_executor = None
+        self._tick_counter = 0
 
     def start(self):
         try:
@@ -305,6 +306,8 @@ class UnitreeDriver(RobotDriver):
             return
 
         low_state = self._LowState_factory()
+        self._tick_counter += 1
+        low_state.tick = self._tick_counter
         joint_positions = [0.0] * self._num_motors
         for motor in state.motors:
             try:
