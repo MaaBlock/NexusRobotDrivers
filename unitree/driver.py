@@ -24,6 +24,23 @@ GO2_MOTOR_NAMES = [
     "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
 ]
 
+G1_MOTOR_NAMES = [
+    # 左腿 (0-5)
+    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
+    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+    # 右腿 (6-11)
+    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+    # 腰 (12-14)
+    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+    # 左臂 (15-21)
+    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+    # 右臂 (22-28)
+    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+]
+
 
 class MockMotionSwitcherServer:
     """模拟 MotionSwitcher RPC 服务"""
@@ -176,7 +193,18 @@ class UnitreeDriver(RobotDriver):
         self._lowcmd_sub = None
         self._lowstate_pub = None
         self._pending_cmd: Optional[JointCommand] = None
-        self._motor_names: List[str] = robot_info.joints if robot_info.joints else GO2_MOTOR_NAMES
+
+        # 根据关节数自动识别机器人类型
+        n_joints = len(robot_info.joints) if robot_info.joints else 12
+        if n_joints >= 29:
+            self._robot_type = "g1"
+            self._motor_names = robot_info.joints if robot_info.joints else G1_MOTOR_NAMES
+            self._num_motors = 29
+        else:
+            self._robot_type = "go2"
+            self._motor_names = robot_info.joints if robot_info.joints else GO2_MOTOR_NAMES
+            self._num_motors = 12
+
         self._mock_msc = MockMotionSwitcherServer()
         self._sport_server = SportMotionServer()
         self._motion_executor = None
@@ -186,19 +214,26 @@ class UnitreeDriver(RobotDriver):
             from unitree_sdk2py.core.channel import (
                 ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
             )
-            from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
-            from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 
             ChannelFactoryInitialize(0, "eth0")
 
-            self._LowState_factory = unitree_go_msg_dds__LowState_
+            if self._robot_type == "g1":
+                from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
+                from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
+                self._LowState_factory = unitree_hg_msg_dds__LowState_
+            else:
+                from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_
+                from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
+                self._LowState_factory = unitree_go_msg_dds__LowState_
 
-            from .sport_motions import MotionExecutor
-            self._motion_executor = MotionExecutor(self._on_motion_cmd)
-            self._sport_server.set_executor(self._motion_executor)
+            # Go2 专有的 Sport 动作服务
+            if self._robot_type == "go2":
+                from .sport_motions import MotionExecutor
+                self._motion_executor = MotionExecutor(self._on_motion_cmd)
+                self._sport_server.set_executor(self._motion_executor)
+                self._sport_server.start()
 
             self._mock_msc.start()
-            self._sport_server.start()
 
             self._lowcmd_sub = ChannelSubscriber("rt/lowcmd", LowCmd_)
             self._lowcmd_sub.Init(self._on_dds_lowcmd, 10)
@@ -207,7 +242,7 @@ class UnitreeDriver(RobotDriver):
             self._lowstate_pub.Init()
 
             self._running = True
-            logger.info(f"[{self.robot_id}] 宇树 DDS 驱动已启动 (电机: {len(self._motor_names)}, Sport 动作已启用)")
+            logger.info(f"[{self.robot_id}] 宇树 {self._robot_type.upper()} DDS 驱动已启动 (电机: {self._num_motors})")
         except ImportError as e:
             raise RuntimeError(f"需要安装 unitree_sdk2py: {e}")
 
@@ -241,7 +276,7 @@ class UnitreeDriver(RobotDriver):
             # 简单方案: 不在这里停止，让 Sport 动作自然完成
             pass
 
-        n = min(len(self._motor_names), 20)
+        n = min(self._num_motors, len(msg.motor_cmd))
         motors = []
         for i in range(n):
             mc = msg.motor_cmd[i]
@@ -270,7 +305,7 @@ class UnitreeDriver(RobotDriver):
             return
 
         low_state = self._LowState_factory()
-        joint_positions = [0.0] * 12
+        joint_positions = [0.0] * self._num_motors
         for motor in state.motors:
             try:
                 idx = self._motor_names.index(motor.name)
@@ -279,11 +314,10 @@ class UnitreeDriver(RobotDriver):
             low_state.motor_state[idx].q = motor.q
             low_state.motor_state[idx].dq = motor.dq
             low_state.motor_state[idx].tau_est = motor.tau
-            if idx < 12:
+            if idx < self._num_motors:
                 joint_positions[idx] = motor.q
 
         self._lowstate_pub.Write(low_state)
 
-        # 更新 MotionExecutor 的当前状态
         if self._motion_executor:
             self._motion_executor.update_state(joint_positions)
