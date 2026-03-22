@@ -4,7 +4,7 @@ UnitreeDriver — 宇树机器人 DDS↔ZMQ 桥接驱动
 完整模拟宇树机器人的 DDS 接口:
   - 订阅 rt/lowcmd (控制脚本发来的关节指令)
   - 发布 rt/lowstate (引擎状态回传给控制脚本)
-  - 模拟 MotionSwitcher / Sport RPC 服务 (官方脚本初始化需要)
+  - MotionSwitcher / Sport RPC 服务 (含 Dance1/Dance2 等实际动作执行)
 """
 import json
 import time
@@ -59,34 +59,109 @@ class MockMotionSwitcherServer:
         return 0, ""
 
 
-class MockSportServer:
-    """模拟 Sport RPC 服务"""
+class SportMotionServer:
+    """Sport RPC 服务 — 接收高级动作指令并通过 MotionExecutor 执行"""
+
     def __init__(self):
         self._server = None
+        self._executor = None
+
+    def set_executor(self, executor):
+        """注入 MotionExecutor 引用"""
+        self._executor = executor
 
     def start(self):
         from unitree_sdk2py.rpc.server import Server
         from unitree_sdk2py.go2.sport.sport_api import (
             SPORT_SERVICE_NAME,
             SPORT_API_VERSION,
-            SPORT_API_ID_STANDDOWN,
-            SPORT_API_ID_STANDUP,
+            SPORT_API_ID_DAMP,
             SPORT_API_ID_BALANCESTAND,
             SPORT_API_ID_STOPMOVE,
+            SPORT_API_ID_STANDUP,
+            SPORT_API_ID_STANDDOWN,
             SPORT_API_ID_RECOVERYSTAND,
-            SPORT_API_ID_DAMP,
+            SPORT_API_ID_HELLO,
+            SPORT_API_ID_STRETCH,
+            SPORT_API_ID_CONTENT,
+            SPORT_API_ID_DANCE1,
+            SPORT_API_ID_DANCE2,
+            SPORT_API_ID_HEART,
+            SPORT_API_ID_EULER,
+            SPORT_API_ID_MOVE,
+            SPORT_API_ID_SIT,
+            SPORT_API_ID_RISESIT,
+            SPORT_API_ID_SPEEDLEVEL,
+            SPORT_API_ID_SWITCHJOYSTICK,
+            SPORT_API_ID_POSE,
+            SPORT_API_ID_SCRAPE,
+            SPORT_API_ID_FRONTFLIP,
+            SPORT_API_ID_FRONTJUMP,
+            SPORT_API_ID_FRONTPOUNCE,
         )
 
         self._server = Server(SPORT_SERVICE_NAME)
         self._server._SetApiVersion(SPORT_API_VERSION)
-        self._server._RegistHandler(SPORT_API_ID_STANDDOWN, self._noop, False)
-        self._server._RegistHandler(SPORT_API_ID_STANDUP, self._noop, False)
-        self._server._RegistHandler(SPORT_API_ID_BALANCESTAND, self._noop, False)
-        self._server._RegistHandler(SPORT_API_ID_STOPMOVE, self._noop, False)
-        self._server._RegistHandler(SPORT_API_ID_RECOVERYSTAND, self._noop, False)
-        self._server._RegistHandler(SPORT_API_ID_DAMP, self._noop, False)
+
+        # 有实际动作的命令
+        motion_apis = [
+            SPORT_API_ID_STANDUP,
+            SPORT_API_ID_STANDDOWN,
+            SPORT_API_ID_RECOVERYSTAND,
+            SPORT_API_ID_BALANCESTAND,
+            SPORT_API_ID_HELLO,
+            SPORT_API_ID_STRETCH,
+            SPORT_API_ID_CONTENT,
+            SPORT_API_ID_DANCE1,
+            SPORT_API_ID_DANCE2,
+            SPORT_API_ID_HEART,
+        ]
+        for api_id in motion_apis:
+            self._server._RegistHandler(api_id, self._make_motion_handler(api_id), False)
+
+        # 简单应答的命令 (无实际动作)
+        noop_apis = [
+            SPORT_API_ID_DAMP,
+            SPORT_API_ID_STOPMOVE,
+            SPORT_API_ID_EULER,
+            SPORT_API_ID_MOVE,
+            SPORT_API_ID_SIT,
+            SPORT_API_ID_RISESIT,
+            SPORT_API_ID_SPEEDLEVEL,
+            SPORT_API_ID_SWITCHJOYSTICK,
+            SPORT_API_ID_POSE,
+            SPORT_API_ID_SCRAPE,
+            SPORT_API_ID_FRONTFLIP,
+            SPORT_API_ID_FRONTJUMP,
+            SPORT_API_ID_FRONTPOUNCE,
+        ]
+        for api_id in noop_apis:
+            self._server._RegistHandler(api_id, self._noop, False)
+
         self._server.Start()
-        logger.info("Sport RPC 模拟服务已启动")
+        logger.info("Sport RPC 服务已启动 (支持 Dance1/Dance2/Hello 等动作)")
+
+    def _make_motion_handler(self, api_id):
+        """为每个 API ID 创建独立的 handler 闭包"""
+        def handler(parameter):
+            return self._execute_motion(api_id)
+        return handler
+
+    def _execute_motion(self, api_id):
+        """触发 MotionExecutor 播放对应动作"""
+        if self._executor is None:
+            logger.warning("MotionExecutor 未初始化")
+            return 1, ""
+
+        from .sport_motions import get_motion_for_api
+        sequence = get_motion_for_api(api_id)
+        if sequence is None:
+            logger.warning(f"未找到 API {api_id} 对应的动作序列")
+            return 1, ""
+
+        logger.info(f"Sport 指令: {sequence.name} (api_id={api_id})")
+        self._executor.play(sequence)
+        return 0, ""
 
     def _noop(self, parameter):
         return 0, ""
@@ -103,7 +178,8 @@ class UnitreeDriver(RobotDriver):
         self._pending_cmd: Optional[JointCommand] = None
         self._motor_names: List[str] = robot_info.joints if robot_info.joints else GO2_MOTOR_NAMES
         self._mock_msc = MockMotionSwitcherServer()
-        self._mock_sport = MockSportServer()
+        self._sport_server = SportMotionServer()
+        self._motion_executor = None
 
     def start(self):
         try:
@@ -115,8 +191,14 @@ class UnitreeDriver(RobotDriver):
 
             ChannelFactoryInitialize(0, "eth0")
 
+            self._LowState_factory = unitree_go_msg_dds__LowState_
+
+            from .sport_motions import MotionExecutor
+            self._motion_executor = MotionExecutor(self._on_motion_cmd)
+            self._sport_server.set_executor(self._motion_executor)
+
             self._mock_msc.start()
-            self._mock_sport.start()
+            self._sport_server.start()
 
             self._lowcmd_sub = ChannelSubscriber("rt/lowcmd", LowCmd_)
             self._lowcmd_sub.Init(self._on_dds_lowcmd, 10)
@@ -124,18 +206,41 @@ class UnitreeDriver(RobotDriver):
             self._lowstate_pub = ChannelPublisher("rt/lowstate", LowState_)
             self._lowstate_pub.Init()
 
-            self._LowState_factory = unitree_go_msg_dds__LowState_
             self._running = True
-            logger.info(f"[{self.robot_id}] 宇树 DDS 驱动已启动 (电机: {len(self._motor_names)}, RPC 模拟已开启)")
+            logger.info(f"[{self.robot_id}] 宇树 DDS 驱动已启动 (电机: {len(self._motor_names)}, Sport 动作已启用)")
         except ImportError as e:
             raise RuntimeError(f"需要安装 unitree_sdk2py: {e}")
 
     def stop(self):
+        if self._motion_executor:
+            self._motion_executor.stop()
         self._running = False
         logger.info(f"[{self.robot_id}] 宇树 DDS 驱动已停止")
 
+    def _on_motion_cmd(self, pose: List[float], kp: float, kd: float):
+        """MotionExecutor 的回调: 直接生成 JointCommand (绕过 DDS 避免回路)"""
+        n = min(len(pose), len(self._motor_names))
+        motors = []
+        for i in range(n):
+            motors.append(MotorCommand(
+                name=self._motor_names[i],
+                q=pose[i],
+                dq=0.0,
+                kp=kp,
+                kd=kd,
+                tau=0.0,
+            ))
+        self._pending_cmd = JointCommand(robot_id=self.robot_id, motors=motors)
+
     def _on_dds_lowcmd(self, msg):
         """DDS 回调: 控制脚本发来 LowCmd → 转为 JointCommand"""
+        # 用户脚本手动发指令时，停止正在播放的 Sport 动作
+        if self._motion_executor and self._motion_executor.is_playing:
+            # 检查是否来自 MotionExecutor 自己 (避免死循环)
+            # Note: MotionExecutor 通过 _publish_lowcmd 发送，也会触发本回调
+            # 简单方案: 不在这里停止，让 Sport 动作自然完成
+            pass
+
         n = min(len(self._motor_names), 20)
         motors = []
         for i in range(n):
@@ -160,11 +265,12 @@ class UnitreeDriver(RobotDriver):
         return cmd
 
     def on_engine_state(self, state: JointState):
-        """引擎状态 → DDS rt/lowstate"""
+        """引擎状态 → DDS rt/lowstate + MotionExecutor 状态更新"""
         if not self._lowstate_pub:
             return
 
         low_state = self._LowState_factory()
+        joint_positions = [0.0] * 12
         for motor in state.motors:
             try:
                 idx = self._motor_names.index(motor.name)
@@ -173,5 +279,11 @@ class UnitreeDriver(RobotDriver):
             low_state.motor_state[idx].q = motor.q
             low_state.motor_state[idx].dq = motor.dq
             low_state.motor_state[idx].tau_est = motor.tau
+            if idx < 12:
+                joint_positions[idx] = motor.q
 
         self._lowstate_pub.Write(low_state)
+
+        # 更新 MotionExecutor 的当前状态
+        if self._motion_executor:
+            self._motion_executor.update_state(joint_positions)
