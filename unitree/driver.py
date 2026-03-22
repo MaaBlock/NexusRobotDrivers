@@ -315,17 +315,34 @@ class UnitreeDriver(RobotDriver):
         low_state.imu_state.quaternion = state.imu_quaternion
         low_state.imu_state.gyroscope = state.imu_gyroscope
 
+        # 诊断日志（只打印前几次）
+        if self._tick_counter <= 3:
+            logger.info(f"[诊断] tick={self._tick_counter} motors_recv={len(state.motors)} "
+                        f"imu_q={state.imu_quaternion[:4]} imu_g={state.imu_gyroscope[:3]}")
+            if state.motors:
+                names_recv = [m.name for m in state.motors[:5]]
+                names_local = self._motor_names[:5]
+                logger.info(f"[诊断] 引擎 actuator 名(前5): {names_recv}")
+                logger.info(f"[诊断] 驱动 motor_names(前5): {names_local}")
+
+        matched = 0
         joint_positions = [0.0] * self._num_motors
         for motor in state.motors:
             try:
                 idx = self._motor_names.index(motor.name)
             except ValueError:
+                if self._tick_counter <= 3:
+                    logger.warning(f"[诊断] 名称不匹配: '{motor.name}' 不在 motor_names 中")
                 continue
             low_state.motor_state[idx].q = motor.q
             low_state.motor_state[idx].dq = motor.dq
             low_state.motor_state[idx].tau_est = motor.tau
             if idx < self._num_motors:
                 joint_positions[idx] = motor.q
+            matched += 1
+
+        if self._tick_counter <= 3:
+            logger.info(f"[诊断] 匹配成功: {matched}/{len(state.motors)}")
 
         self._lowstate_pub.Write(low_state)
 
