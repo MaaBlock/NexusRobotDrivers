@@ -170,7 +170,7 @@ class SportMotionServer:
             logger.warning("MotionExecutor 未初始化")
             return 1, ""
 
-        from .sport_motions import get_motion_for_api
+        from sport_motions import get_motion_for_api
         sequence = get_motion_for_api(api_id)
         if sequence is None:
             logger.warning(f"未找到 API {api_id} 对应的动作序列")
@@ -231,7 +231,7 @@ class UnitreeDriver(RobotDriver):
 
             # Go2 专有的 Sport 动作服务
             if self._robot_type == "go2":
-                from .sport_motions import MotionExecutor
+                from sport_motions import MotionExecutor
                 self._motion_executor = MotionExecutor(self._on_motion_cmd)
                 self._sport_server.set_executor(self._motion_executor)
                 self._sport_server.start()
