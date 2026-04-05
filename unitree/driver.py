@@ -245,9 +245,41 @@ class UnitreeDriver(RobotDriver):
             self._lowstate_pub.Init()
 
             self._running = True
+            
+            try:
+                import cv2
+                import numpy as np
+                from ultralytics import YOLO
+                self._yolo = YOLO("yolov8n.pt")
+                self._latest_frame = None
+                self._vision_thread = threading.Thread(target=self._vision_loop, daemon=True)
+                self._vision_thread.start()
+                logger.info("YOLOv8 vision thread started for YOLO object detection.")
+            except ImportError:
+                self._yolo = None
+                logger.info("ultralytics or cv2 not installed, vision disabled.")
+
             logger.info(f"[{self.robot_id}] 宇树 {self._robot_type.upper()} DDS 驱动已启动 (电机: {self._num_motors})")
         except ImportError as e:
             raise RuntimeError(f"需要安装 unitree_sdk2py: {e}")
+
+    def _vision_loop(self):
+        import cv2
+        while self._running:
+            if self._latest_frame is not None:
+                frame = self._latest_frame
+                self._latest_frame = None
+                results = self._yolo(frame, verbose=False)
+                res_plotted = results[0].plot()
+                cv2.imshow(f"Unitree Vision [{self._robot_type.upper()}] - {self.robot_id}", res_plotted)
+                cv2.waitKey(1)
+            else:
+                import time
+                time.sleep(0.01)
+        try:
+            cv2.destroyAllWindows()
+        except:
+            pass
 
     def stop(self):
         if self._motion_executor:
@@ -348,3 +380,16 @@ class UnitreeDriver(RobotDriver):
 
         if self._motion_executor:
             self._motion_executor.update_state(joint_positions)
+
+    def on_vision_image(self, width: int, height: int, pixels: bytes):
+        """接收并处理 Bridge 转发来的相机数据"""
+        if not getattr(self, "_yolo", None):
+            return
+        
+        # 确保数据长度合法 (RGBA8_UNORM)
+        if len(pixels) == width * height * 4:
+            import numpy as np
+            import cv2
+            img_np = np.frombuffer(pixels, dtype=np.uint8).reshape((height, width, 4))
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+            self._latest_frame = img_bgr
