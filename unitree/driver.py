@@ -178,6 +178,8 @@ class UnitreeDriver(RobotDriver):
         self._sport_server = SportMotionServer()
         self._motion_executor = None
         self._tick_counter = 0
+        self._latest_jpeg_data = []
+        self._video_server = None
 
     def start(self):
         try:
@@ -216,39 +218,31 @@ class UnitreeDriver(RobotDriver):
             self._running = True
             
             try:
-                import cv2
-                import numpy as np
-                from ultralytics import YOLO
-                self._yolo = YOLO("yolov8n.pt")
-                self._latest_frame = None
-                self._vision_thread = threading.Thread(target=self._vision_loop, daemon=True)
-                self._vision_thread.start()
-                logger.info("YOLOv8 vision thread started for YOLO object detection.")
+                from unitree_sdk2py.rpc.server import Server
+                self._video_server = Server("videohub")
+                
+                # [HOTFIX] 修复原生 unitree_sdk2py 官方库中的严重的 dict/set 拼写 Bug
+                # 他们在 sdk.__init__ 里写成了 self.__apiBinarySet = {} 导致对它执行 .add 会报错
+                setattr(self._video_server, "_Server__apiBinarySet", set())
+                
+                self._video_server._SetApiVersion("1.0.0.1")
+                # 1001 is VIDEO_API_ID_GETIMAGESAMPLE
+                self._video_server._RegistBinaryHandler(1001, self._handle_video_rpc, False)
+                self._video_server.Start()
+                logger.info("Unitree Video Server 'videohub' started via DDS RPC.")
             except ImportError:
-                self._yolo = None
-                logger.info("ultralytics or cv2 not installed, vision disabled.")
+                self._video_server = None
+                logger.info("Cannot start video server, unitree_sdk2py.rpc missing.")
 
             logger.info(f"[{self.robot_id}] 宇树 {self._robot_type.upper()} DDS 驱动已启动 (电机: {self._num_motors})")
+
         except ImportError as e:
             raise RuntimeError(f"需要安装 unitree_sdk2py: {e}")
 
-    def _vision_loop(self):
-        import cv2
-        while self._running:
-            if self._latest_frame is not None:
-                frame = self._latest_frame
-                self._latest_frame = None
-                results = self._yolo(frame, verbose=False)
-                res_plotted = results[0].plot()
-                cv2.imshow(f"Unitree Vision [{self._robot_type.upper()}] - {self.robot_id}", res_plotted)
-                cv2.waitKey(1)
-            else:
-                import time
-                time.sleep(0.01)
-        try:
-            cv2.destroyAllWindows()
-        except:
-            pass
+    def _handle_video_rpc(self, parameter):
+        if not self._latest_jpeg_data:
+            return 1, []
+        return 0, self._latest_jpeg_data
 
     def stop(self):
         if self._motion_executor:
@@ -352,13 +346,18 @@ class UnitreeDriver(RobotDriver):
 
     def on_vision_image(self, width: int, height: int, pixels: bytes):
         """接收并处理 Bridge 转发来的相机数据"""
-        if not getattr(self, "_yolo", None):
+        if not getattr(self, "_video_server", None):
             return
         
         # 确保数据长度合法 (RGBA8_UNORM)
         if len(pixels) == width * height * 4:
-            import numpy as np
-            import cv2
-            img_np = np.frombuffer(pixels, dtype=np.uint8).reshape((height, width, 4))
-            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
-            self._latest_frame = img_bgr
+            try:
+                import numpy as np
+                import cv2
+                img_np = np.frombuffer(pixels, dtype=np.uint8).reshape((height, width, 4))
+                img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+                ret, buffer = cv2.imencode('.jpg', img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if ret:
+                    self._latest_jpeg_data = buffer.tolist()
+            except ImportError:
+                pass
