@@ -17,31 +17,6 @@ from nexus_bridge.protocol import RobotInfo, JointCommand, JointState, MotorComm
 
 logger = logging.getLogger("nexus_bridge.driver.unitree")
 
-GO2_MOTOR_NAMES = [
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-]
-
-G1_MOTOR_NAMES = [
-    # 左腿 (0-5)
-    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
-    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-    # 右腿 (6-11)
-    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
-    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-    # 腰 (12-14)
-    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
-    # 左臂 (15-21)
-    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
-    # 右臂 (22-28)
-    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
-]
-
-
 class MockMotionSwitcherServer:
     """模拟 MotionSwitcher RPC 服务"""
     def __init__(self):
@@ -194,16 +169,10 @@ class UnitreeDriver(RobotDriver):
         self._lowstate_pub = None
         self._pending_cmd: Optional[JointCommand] = None
 
-        # 根据关节数自动识别机器人类型
-        n_joints = len(robot_info.joints) if robot_info.joints else 12
-        if n_joints >= 29:
-            self._robot_type = "g1"
-            self._motor_names = robot_info.joints if robot_info.joints else G1_MOTOR_NAMES
-            self._num_motors = 29
-        else:
-            self._robot_type = "go2"
-            self._motor_names = robot_info.joints if robot_info.joints else GO2_MOTOR_NAMES
-            self._num_motors = 12
+        # 引擎已支持传递具体的机器人名称
+        self._robot_type = robot_info.robot_name
+        self._motor_names = robot_info.joints
+        self._num_motors = len(self._motor_names)
 
         self._mock_msc = MockMotionSwitcherServer()
         self._sport_server = SportMotionServer()
