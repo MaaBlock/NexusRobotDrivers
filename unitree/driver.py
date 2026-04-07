@@ -191,7 +191,7 @@ class UnitreeDriver(RobotDriver):
             ChannelFactoryInitialize(0, dds_iface)
             logger.info(f"DDS 初始化: domain=0, interface={dds_iface}")
 
-            if self._robot_type == "g1":
+            if "g1" in self._robot_type.lower():
                 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
                 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
                 self._LowState_factory = unitree_hg_msg_dds__LowState_
@@ -240,9 +240,15 @@ class UnitreeDriver(RobotDriver):
             raise RuntimeError(f"需要安装 unitree_sdk2py: {e}")
 
     def _handle_video_rpc(self, parameter):
-        if not self._latest_jpeg_data:
-            return 1, []
-        return 0, self._latest_jpeg_data
+        import time
+        # 等待首帧图像最多 3 秒，防止客户端启动太快拿到空数据直接 crash
+        for _ in range(60):
+            if self._latest_jpeg_data:
+                return 0, self._latest_jpeg_data
+            time.sleep(0.05)
+            
+        logger.warning("VideoRPC: 获取图像超时 (无最近帧)")
+        return 1, []
 
     def stop(self):
         if self._motion_executor:
@@ -329,9 +335,16 @@ class UnitreeDriver(RobotDriver):
                 if self._tick_counter <= 3:
                     logger.warning(f"[诊断] 名称不匹配: '{motor.name}' 不在 motor_names 中")
                 continue
-            low_state.motor_state[idx].q = motor.q
-            low_state.motor_state[idx].dq = motor.dq
-            low_state.motor_state[idx].tau_est = motor.tau
+            
+            try:
+                low_state.motor_state[idx].q = motor.q
+                low_state.motor_state[idx].dq = motor.dq
+                low_state.motor_state[idx].tau_est = motor.tau
+            except IndexError:
+                if self._tick_counter <= 3:
+                    logger.warning(f"[诊断] 索引越界: '{motor.name}' idx={idx}")
+                continue
+
             if idx < self._num_motors:
                 joint_positions[idx] = motor.q
             matched += 1
@@ -359,5 +372,8 @@ class UnitreeDriver(RobotDriver):
                 ret, buffer = cv2.imencode('.jpg', img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
                 if ret:
                     self._latest_jpeg_data = buffer.tolist()
-            except ImportError:
-                pass
+                
+            except Exception as e:
+                logger.error(f"[诊断] 视觉数据处理失败: {e}")
+        else:
+            logger.warning(f"[诊断] 接收到不匹配的视觉数据大小: {len(pixels)} (expected {width*height*4})")
