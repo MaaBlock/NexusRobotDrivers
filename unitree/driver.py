@@ -191,7 +191,9 @@ class UnitreeDriver(RobotDriver):
             ChannelFactoryInitialize(0, dds_iface)
             logger.info(f"DDS 初始化: domain=0, interface={dds_iface}")
 
-            if "g1" in self._robot_type.lower():
+            is_humanoid = any(x in self._robot_type.lower() for x in ["g1", "h1"])
+            
+            if is_humanoid:
                 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_
                 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
                 self._LowState_factory = unitree_hg_msg_dds__LowState_
@@ -201,7 +203,7 @@ class UnitreeDriver(RobotDriver):
                 self._LowState_factory = unitree_go_msg_dds__LowState_
 
             # Go2 专有的 Sport 动作服务
-            if self._robot_type == "go2":
+            if "go2" in self._robot_type.lower():
                 from sport_motions import MotionExecutor
                 self._motion_executor = MotionExecutor(self._on_motion_cmd)
                 self._sport_server.set_executor(self._motion_executor)
