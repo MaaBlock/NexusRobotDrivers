@@ -370,7 +370,7 @@ class UnitreeDriver(RobotDriver):
                 import numpy as np
                 import cv2
                 img_np = np.frombuffer(pixels, dtype=np.uint8).reshape((height, width, 4))
-                img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+                img_bgr = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
                 ret, buffer = cv2.imencode('.jpg', img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
                 if ret:
                     self._latest_jpeg_data = buffer.tolist()
